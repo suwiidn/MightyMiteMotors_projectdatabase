@@ -1,0 +1,130 @@
+/* =====================================================================
+   1.4 SQL Queries ของ T1 - T8  (Database: MightyMiteMotors)
+   ตรงกับโค้ด Java: ? = PreparedStatement parameter (ใน SSMS ให้แทนด้วยค่าจริง)
+   ===================================================================== */
+
+-- =====================================================================
+-- T1: ค้นหาและแสดงแคตตาล็อกสินค้า (ning) [SELECT]
+-- =====================================================================
+-- T1.1 แสดงทั้งหมด
+SELECT model_numb, model_description, suggested_retail_price
+FROM model;
+
+-- T1.2 ค้นหาตามชื่อรุ่น (ใช้ ix_model_description)
+SELECT model_numb, model_description, suggested_retail_price
+FROM model
+WHERE model_description LIKE '%' + ? + '%';
+
+-- =====================================================================
+-- T2: ตรวจสอบสินค้าคงเหลือและจองสินค้าให้ order (ning) [SELECT + UPDATE]
+-- (Java: T2_ReserveProduct)  Isolation = SERIALIZABLE
+-- =====================================================================
+-- T2.0 ตรวจว่ามี order และ model จริง
+SELECT COUNT(*) FROM orders WHERE order_numb = ?;
+SELECT COUNT(*) FROM model  WHERE model_numb = ?;
+
+-- T2.1 นับสินค้าว่างของรุ่นนั้น (ล็อกกันจองซ้ำ)
+SELECT COUNT(*) FROM product WITH (UPDLOCK)
+WHERE model_numb = ? AND order_numb IS NULL;
+
+-- T2.2 จองสินค้าตามจำนวน (ถ้า T2.1 >= จำนวนที่ต้องการ)
+UPDATE TOP (?) product
+SET order_numb = ?
+WHERE model_numb = ? AND order_numb IS NULL;
+
+-- =====================================================================
+-- T3: ลงทะเบียนลูกค้าใหม่ (JN) [SELECT + INSERT]
+-- *** แก้ชื่อคอลัมน์ให้ตรงกับตาราง customer และโค้ดของ JN ***
+-- =====================================================================
+-- T3.1 เช็กว่ามีลูกค้าซ้ำหรือไม่ (ต้องได้ 0)
+SELECT COUNT(*) FROM customer WHERE customer_numb = ?;
+-- T3.2 เพิ่มลูกค้าใหม่
+INSERT INTO customer (customer_numb, customer_name) VALUES (?, ?);
+
+-- =====================================================================
+-- T4: สร้างและบันทึกคำสั่งซื้อใหม่ (JN) [INSERT + UPDATE]
+-- (Java: T4_CreateOrder)  Isolation = SERIALIZABLE
+-- =====================================================================
+-- T4.0 ตรวจลูกค้า / รุ่นสินค้า / เลข Order ซ้ำ
+SELECT COUNT(*) FROM customer WHERE customer_numb = ?;
+SELECT COUNT(*) FROM model    WHERE model_numb = ?;
+SELECT COUNT(*) FROM orders   WHERE order_numb = ?;
+
+-- T4.1 สร้างหัวบิล
+INSERT INTO orders (order_numb, customer_numb, order_date, order_total, order_filled)
+VALUES (?, ?, GETDATE(), 0, 0);
+
+-- T4.2 เพิ่มรายการสินค้า
+INSERT INTO order_line (order_numb, model_numb, quantity_ordered, unit_price, line_total, all_shipped)
+VALUES (?, ?, ?, ?, ?, 0);
+
+-- T4.3 อัปเดตยอดรวม
+UPDATE orders
+SET order_total = (SELECT SUM(line_total) FROM order_line WHERE order_numb = ?)
+WHERE order_numb = ?;
+
+-- =====================================================================
+-- T5: ตรวจสอบสถานะการจัดส่ง (dan) [SELECT JOIN]
+-- *** shipment ใช้ชื่อตารางเดียวกับ T6 (คอลัมน์ order_numb) ***
+-- =====================================================================
+SELECT o.order_numb, o.order_date, o.order_filled,
+       ol.model_numb, ol.quantity_ordered, ol.all_shipped,
+       COUNT(s.order_numb) AS shipment_count
+FROM orders o
+JOIN order_line ol ON ol.order_numb = o.order_numb
+LEFT JOIN shipment s ON s.order_numb = o.order_numb
+WHERE o.order_numb = ?
+GROUP BY o.order_numb, o.order_date, o.order_filled,
+         ol.model_numb, ol.quantity_ordered, ol.all_shipped;
+
+-- =====================================================================
+-- T6: ยกเลิกคำสั่งซื้อที่ยังไม่ได้จัดส่ง (dan) [SELECT + UPDATE + DELETE]
+-- (Java: TransactionT6_CancelOrderMenu)  Isolation = SERIALIZABLE
+-- =====================================================================
+-- T6.0 ตรวจว่ามีบิลนี้
+SELECT COUNT(*) FROM orders WHERE order_numb = ?;
+-- T6.1 เช็ก shipment (ต้องได้ 0 จึงยกเลิกได้)
+SELECT COUNT(*) AS ship_count FROM shipment WHERE order_numb = ?;
+-- T6.2 แสดงรายการสินค้าในบิล
+SELECT m.model_numb, m.model_description, ol.quantity_ordered, ol.line_total, o.order_total
+FROM orders o
+JOIN order_line ol ON o.order_numb = ol.order_numb
+JOIN model m ON ol.model_numb = m.model_numb
+WHERE o.order_numb = ?;
+-- T6.3 ปลดล็อกสินค้าที่จอง
+UPDATE product SET order_numb = NULL WHERE order_numb = ?;
+-- T6.4 ลบรายการสินค้า
+DELETE FROM order_line WHERE order_numb = ?;
+-- T6.5 ลบหัวบิล
+DELETE FROM orders WHERE order_numb = ?;
+
+-- =====================================================================
+-- T7: ปรับปรุงราคาในแคตตาล็อก (Q) [SELECT + UPDATE]
+-- (Java: T7_UpdateModelPrice)  Isolation = REPEATABLE_READ
+-- =====================================================================
+-- T7.1 อ่านค่าปัจจุบัน (ล็อกแถว)
+SELECT suggested_retail_price, time_to_manufacture
+FROM model WITH (UPDLOCK)
+WHERE model_numb = ?;
+-- T7.2 แก้ราคา และ/หรือ ระยะเวลาผลิต (NULL = คงค่าเดิม)
+UPDATE model
+SET suggested_retail_price = ISNULL(?, suggested_retail_price),
+    time_to_manufacture    = ISNULL(?, time_to_manufacture)
+WHERE model_numb = ?;
+
+-- =====================================================================
+-- T8: เรียกดูประวัติการสั่งซื้อของลูกค้า (Q) [SELECT JOIN]
+-- =====================================================================
+-- T8.1 รายการบิลของลูกค้า
+SELECT o.order_numb, o.order_date, o.order_total, o.order_filled
+FROM customer c
+JOIN orders o ON o.customer_numb = c.customer_numb
+WHERE c.customer_numb = ?
+ORDER BY o.order_date DESC;
+
+-- T8.2 สรุปจำนวนบิลและยอดรวม
+SELECT c.customer_numb, COUNT(o.order_numb) AS order_count, SUM(o.order_total) AS total_amount
+FROM customer c
+JOIN orders o ON o.customer_numb = c.customer_numb
+WHERE c.customer_numb = ?
+GROUP BY c.customer_numb;
