@@ -14,7 +14,7 @@ import java.util.Scanner;
  * เหตุผล: ถ้าสอง Transaction นับพร้อมกันได้ว่า "เหลือ 1 ชิ้น" แล้วต่างคนต่างจอง จะเกิดการจองเกิน (Phantom Read / Lost Update)
  * UPDLOCK + SERIALIZABLE ทำให้ Transaction ที่สองต้องรอจนอันแรก commit/rollback
  */
-public class T2_ReserveProduct {
+public class TransactionT2_ReserveProduct {
 
     public enum Result { SUCCESS, NOT_ENOUGH_STOCK, ORDER_NOT_FOUND, MODEL_NOT_FOUND, INVALID_QTY }
 
@@ -43,8 +43,14 @@ public class T2_ReserveProduct {
             conn.setAutoCommit(false);
             conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
 
+            showOrders(conn);            // <-- เพิ่ม: แสดงรายการใบสั่งซื้อ
+            showModelsWithStock(conn);   // <-- เพิ่ม: แสดงรุ่นสินค้า + จำนวนที่ว่าง
+
             System.out.print("กรุณากรอกหมายเลขใบสั่งซื้อ (Order Number): ");
             int orderNumb = scanner.nextInt();
+
+            showOrderLines(conn, orderNumb);   // <-- เพิ่ม: แสดงว่าลูกค้าสั่งรุ่นอะไร กี่ชิ้น จองแล้วกี่ชิ้น
+
             System.out.print("กรุณากรอกรหัสรุ่นสินค้า (Model Number): ");
             int modelNumb = scanner.nextInt();
             System.out.print("กรุณากรอกจำนวนที่ต้องการจอง (ชิ้น): ");
@@ -126,6 +132,91 @@ public class T2_ReserveProduct {
             System.err.println("ไม่สามารถเชื่อมต่อ/ทำงานกับฐานข้อมูลได้: " + e.getMessage());
         } catch (java.util.InputMismatchException e) {
             System.err.println("ข้อมูลที่กรอกไม่ถูกต้อง กรุณากรอกเป็นตัวเลขเท่านั้น");
+        }
+    }
+
+    // =====================================================================
+    //  ส่วนแสดงรายการ (เพิ่มใหม่) ใช้ NOLOCK เพื่อไม่ไปล็อกแถว
+    // =====================================================================
+
+    /** แสดงใบสั่งซื้อทั้งหมด */
+    static void showOrders(Connection conn) throws SQLException {
+        String sql = "SELECT o.order_numb, o.customer_numb, o.order_date, o.order_total, " +
+                     "(SELECT ISNULL(SUM(ol.quantity_ordered), 0) FROM order_line ol WITH (NOLOCK) " +
+                     " WHERE ol.order_numb = o.order_numb) AS ordered, " +
+                     "(SELECT COUNT(*) FROM product p WITH (NOLOCK) " +
+                     " WHERE p.order_numb = o.order_numb) AS reserved " +
+                     "FROM orders o WITH (NOLOCK) ORDER BY o.order_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- รายการใบสั่งซื้อ (Orders) ---");
+            System.out.printf("%-12s %-14s %-14s %-12s %-12s %-15s%n",
+                    "เลขออเดอร์", "รหัสลูกค้า", "วันที่สั่ง", "ยอดรวม", "จอง/สั่ง", "สถานะการจอง");
+            System.out.println("-".repeat(86));
+            while (rs.next()) {
+                int ordered = rs.getInt("ordered");
+                int reserved = rs.getInt("reserved");
+                String status;
+                if (ordered == 0)          status = "ไม่มีรายการสั่ง";
+                else if (reserved >= ordered) status = "จองครบแล้ว";
+                else if (reserved == 0)    status = "ยังไม่จอง";
+                else                       status = "จองบางส่วน";
+                System.out.printf("%-12d %-14d %-14s $%-11.2f %-12s %-15s%n",
+                        rs.getInt("order_numb"), rs.getInt("customer_numb"),
+                        rs.getDate("order_date"), rs.getDouble("order_total"),
+                        reserved + "/" + ordered, status);
+            }
+        }
+    }
+
+    /** แสดงรายการที่ลูกค้าสั่งใน Order นี้ (รุ่น / สั่งกี่ชิ้น / จองแล้วกี่ชิ้น / ยังต้องจองอีกกี่ชิ้น) */
+    static void showOrderLines(Connection conn, int orderNumb) throws SQLException {
+        String sql = "SELECT ol.model_numb, m.model_description, ol.quantity_ordered, " +
+                     "(SELECT COUNT(*) FROM product p WITH (NOLOCK) " +
+                     " WHERE p.order_numb = ol.order_numb AND p.model_numb = ol.model_numb) AS reserved " +
+                     "FROM order_line ol WITH (NOLOCK) " +
+                     "JOIN model m WITH (NOLOCK) ON ol.model_numb = m.model_numb " +
+                     "WHERE ol.order_numb = ? ORDER BY ol.model_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, orderNumb);
+            try (ResultSet rs = ps.executeQuery()) {
+                System.out.println("\n--- รายการที่ลูกค้าสั่งใน Order #" + orderNumb + " ---");
+                System.out.printf("%-10s %-30s %-12s %-10s %-12s %-15s%n",
+                        "รหัสรุ่น", "ชื่อรุ่น", "สั่ง(ชิ้น)", "จองแล้ว", "ยังต้องจอง", "สถานะ");
+                System.out.println("-".repeat(94));
+                boolean any = false;
+                while (rs.next()) {
+                    any = true;
+                    int ordered = rs.getInt("quantity_ordered");
+                    int reserved = rs.getInt("reserved");
+                    String status;
+                    if (reserved >= ordered)  status = "จองครบแล้ว";
+                    else if (reserved == 0)   status = "ยังไม่จอง";
+                    else                      status = "จองบางส่วน";
+                    System.out.printf("%-10d %-30s %-12d %-10d %-12d %-15s%n",
+                            rs.getInt("model_numb"), rs.getString("model_description"),
+                            ordered, reserved, Math.max(0, ordered - reserved), status);
+                }
+                if (!any) System.out.println("(ไม่พบรายการสินค้าใน Order นี้ หรือไม่มี Order นี้ในระบบ)");
+            }
+        }
+    }
+
+    /** แสดงรุ่นสินค้าพร้อมจำนวนสินค้าว่างที่จองได้ */
+    static void showModelsWithStock(Connection conn) throws SQLException {
+        String sql = "SELECT m.model_numb, m.model_description, " +
+                     "SUM(CASE WHEN p.order_numb IS NULL THEN 1 ELSE 0 END) AS available " +
+                     "FROM model m WITH (NOLOCK) LEFT JOIN product p WITH (NOLOCK) ON m.model_numb = p.model_numb " +
+                     "GROUP BY m.model_numb, m.model_description ORDER BY m.model_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- รายการรุ่นสินค้า + จำนวนที่ว่าง ---");
+            System.out.printf("%-10s %-30s %-10s%n", "รหัสรุ่น", "ชื่อรุ่น", "ว่าง(ชิ้น)");
+            System.out.println("-".repeat(52));
+            while (rs.next()) {
+                System.out.printf("%-10d %-30s %-10d%n",
+                        rs.getInt("model_numb"), rs.getString("model_description"), rs.getInt("available"));
+            }
         }
     }
 

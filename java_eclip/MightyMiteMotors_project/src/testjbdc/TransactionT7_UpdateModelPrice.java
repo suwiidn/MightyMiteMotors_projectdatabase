@@ -44,6 +44,8 @@ public class TransactionT7_UpdateModelPrice {
             conn.setAutoCommit(false);
             conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
 
+            showModels(conn);   // <-- เพิ่ม: แสดงรุ่นสินค้าทั้งหมดก่อนถามรหัสรุ่น
+
             System.out.print("กรุณากรอกรหัสรุ่นสินค้า (Model Number) ที่ต้องการแก้ไข: ");
             int modelNumb = scanner.nextInt();
 
@@ -119,6 +121,27 @@ public class TransactionT7_UpdateModelPrice {
             System.err.println("ไม่สามารถเชื่อมต่อ/ทำงานกับฐานข้อมูลได้: " + e.getMessage());
         } catch (java.util.InputMismatchException e) {
             System.err.println("ข้อมูลที่กรอกไม่ถูกต้อง กรุณากรอกเป็นตัวเลขเท่านั้น");
+        }
+    }
+
+    // =====================================================================
+    //  ส่วนแสดงรายการ (เพิ่มใหม่) ใช้ NOLOCK เพื่อไม่ไปล็อกแถว
+    // =====================================================================
+
+    /** แสดงรุ่นสินค้าทั้งหมดก่อนให้เลือกรหัสรุ่น */
+    static void showModels(Connection conn) throws SQLException {
+        String sql = "SELECT model_numb, model_description, suggested_retail_price, time_to_manufacture " +
+                     "FROM model WITH (NOLOCK) ORDER BY model_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- รายการรุ่นสินค้าทั้งหมด ---");
+            System.out.printf("%-10s %-30s %-15s %-15s%n", "รหัสรุ่น", "ชื่อรุ่น", "ราคาแนะนำ", "ผลิต(วัน)");
+            System.out.println("-".repeat(74));
+            while (rs.next()) {
+                System.out.printf("%-10d %-30s $%-14.2f %-15d%n",
+                        rs.getInt("model_numb"), rs.getString("model_description"),
+                        rs.getDouble("suggested_retail_price"), rs.getInt("time_to_manufacture"));
+            }
         }
     }
 

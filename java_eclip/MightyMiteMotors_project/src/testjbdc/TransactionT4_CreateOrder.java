@@ -39,6 +39,9 @@ public class TransactionT4_CreateOrder {
             conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
             System.out.println("Connected to database successfully. Running Transaction T4...");
 
+            showCustomers(conn);        // <-- เพิ่ม: แสดงรายการลูกค้า
+            showExistingOrders(conn);   // <-- เพิ่ม: แสดงใบสั่งซื้อที่มีอยู่แล้ว (ห้ามใช้เลขซ้ำ)
+
             System.out.print("กรุณากรอกหมายเลขใบสั่งซื้อใหม่ (Order Number): ");
             int orderNumb = scanner.nextInt();
             System.out.print("กรุณากรอกรหัสลูกค้า (Customer Number): ");
@@ -87,6 +90,7 @@ public class TransactionT4_CreateOrder {
                             System.out.println("-> กรุณาสร้างหัวบิล (เมนู 1) ก่อน");
                             continue;
                         }
+                        showModels(conn);   // <-- เพิ่ม: แสดงรุ่นสินค้าก่อนถามรหัสรุ่น
                         System.out.print("รหัสรุ่นสินค้า (Model Number): ");
                         int modelNumb = scanner.nextInt();
                         if (count(conn, CHECK_MODEL, modelNumb) == 0) {
@@ -144,6 +148,64 @@ public class TransactionT4_CreateOrder {
             System.err.println("Error occurred: " + e.getMessage());
         } catch (java.util.InputMismatchException e) {
             System.err.println("ข้อมูลที่กรอกไม่ถูกต้อง กรุณากรอกเป็นตัวเลขเท่านั้น");
+        }
+    }
+
+    // =====================================================================
+    //  ส่วนแสดงรายการ (เพิ่มใหม่) ใช้ NOLOCK เพื่อไม่ไปล็อกแถว
+    // =====================================================================
+
+    /** แสดงลูกค้า (อ่านชื่อคอลัมน์จาก metadata เพราะไม่ทราบชื่อคอลัมน์ทั้งหมดของตาราง customer) */
+    static void showCustomers(Connection conn) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM customer WITH (NOLOCK) ORDER BY customer_numb");
+             ResultSet rs = ps.executeQuery()) {
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            int n = md.getColumnCount();
+            System.out.println("\n--- รายการลูกค้า (Customer) ---");
+            for (int i = 1; i <= n; i++) System.out.printf("%-20s", md.getColumnLabel(i));
+            System.out.println();
+            System.out.println("-".repeat(20 * n));
+            while (rs.next()) {
+                for (int i = 1; i <= n; i++) {
+                    String v = rs.getString(i);
+                    System.out.printf("%-20s", v == null ? "NULL" : v);
+                }
+                System.out.println();
+            }
+        }
+    }
+
+    /** แสดงใบสั่งซื้อที่มีอยู่แล้ว (เลขใหม่ห้ามซ้ำ) */
+    static void showExistingOrders(Connection conn) throws SQLException {
+        String sql = "SELECT order_numb, customer_numb, order_date, order_total " +
+                     "FROM orders WITH (NOLOCK) ORDER BY order_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- ใบสั่งซื้อที่มีอยู่แล้ว (ห้ามใช้เลขซ้ำ) ---");
+            System.out.printf("%-12s %-14s %-14s %-12s%n", "เลขออเดอร์", "รหัสลูกค้า", "วันที่สั่ง", "ยอดรวม");
+            System.out.println("-".repeat(54));
+            while (rs.next()) {
+                System.out.printf("%-12d %-14d %-14s $%-11.2f%n",
+                        rs.getInt("order_numb"), rs.getInt("customer_numb"),
+                        rs.getDate("order_date"), rs.getDouble("order_total"));
+            }
+        }
+    }
+
+    /** แสดงรุ่นสินค้าไว้เลือกตอนเพิ่มรายการ */
+    static void showModels(Connection conn) throws SQLException {
+        String sql = "SELECT model_numb, model_description, suggested_retail_price " +
+                     "FROM model WITH (NOLOCK) ORDER BY model_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- รายการรุ่นสินค้า ---");
+            System.out.printf("%-10s %-30s %-15s%n", "รหัสรุ่น", "ชื่อรุ่น", "ราคาแนะนำ");
+            System.out.println("-".repeat(57));
+            while (rs.next()) {
+                System.out.printf("%-10d %-30s $%-14.2f%n",
+                        rs.getInt("model_numb"), rs.getString("model_description"),
+                        rs.getDouble("suggested_retail_price"));
+            }
         }
     }
 

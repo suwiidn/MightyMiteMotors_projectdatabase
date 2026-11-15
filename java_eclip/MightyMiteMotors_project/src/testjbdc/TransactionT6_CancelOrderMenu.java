@@ -36,6 +36,8 @@ public class TransactionT6_CancelOrderMenu {
             conn.setAutoCommit(false);
             conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
 
+            showOrdersWithShipment(conn);   // <-- เพิ่ม: แสดงใบสั่งซื้อพร้อมสถานะการจัดส่ง
+
             System.out.print("กรุณากรอกหมายเลขใบสั่งซื้อ (Order Number) ที่ต้องการจัดการ: ");
             int orderNumb = scanner.nextInt();
 
@@ -121,6 +123,31 @@ public class TransactionT6_CancelOrderMenu {
             e.printStackTrace();
         } catch (Exception e) {
             System.err.println("ข้อมูลที่กรอกไม่ถูกต้อง กรุณากรอกเป็นตัวเลขเท่านั้น");
+        }
+    }
+
+    // =====================================================================
+    //  ส่วนแสดงรายการ (เพิ่มใหม่) ใช้ NOLOCK เพื่อไม่ไปล็อกแถว
+    // =====================================================================
+
+    /** แสดงใบสั่งซื้อพร้อมจำนวน shipment และสถานะว่ายกเลิกได้หรือไม่ */
+    static void showOrdersWithShipment(Connection conn) throws SQLException {
+        String sql = "SELECT o.order_numb, o.customer_numb, o.order_date, o.order_total, " +
+                     "(SELECT COUNT(*) FROM shipment s WITH (NOLOCK) WHERE s.order_numb = o.order_numb) AS ship_cnt " +
+                     "FROM orders o WITH (NOLOCK) ORDER BY o.order_numb";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            System.out.println("\n--- รายการใบสั่งซื้อ ---");
+            System.out.printf("%-12s %-14s %-14s %-12s %-10s %-15s%n",
+                    "เลขออเดอร์", "รหัสลูกค้า", "วันที่สั่ง", "ยอดรวม", "จัดส่ง", "สถานะ");
+            System.out.println("-".repeat(80));
+            while (rs.next()) {
+                int ship = rs.getInt("ship_cnt");
+                System.out.printf("%-12d %-14d %-14s $%-11.2f %-10d %-15s%n",
+                        rs.getInt("order_numb"), rs.getInt("customer_numb"),
+                        rs.getDate("order_date"), rs.getDouble("order_total"),
+                        ship, ship > 0 ? "ส่งแล้ว (ห้ามยกเลิก)" : "ยกเลิกได้");
+            }
         }
     }
 
