@@ -16,7 +16,7 @@ import java.util.Scanner;
  * เหตุผล: ค่าเดิมที่ฝ่ายการตลาดเห็นบนหน้าจอ ต้องเป็นค่าเดียวกับที่ถูกเขียนทับ ไม่มีใครแก้ระหว่างนั้น
  * (กัน Non-Repeatable Read / Lost Update และ Dirty Read)
  */
-public class T7_UpdateModelPrice {
+public class TransactionT7_UpdateModelPrice {
 
     public enum Result { SUCCESS, MODEL_NOT_FOUND, INVALID_VALUE }
 
